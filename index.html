@@ -150,7 +150,7 @@ async function send(){
 
   // 裏に投げる (ブロックしない)
   if (worker && workerReady) {
-    worker.postMessage({ type: 'deepThink', payload: { text, profile: profile.data, recentLeads: core.recentLeads, fastResult: res } });
+    worker.postMessage({ type: 'deepThink', payload: { text, profile: profile.data, recentLeads: core.recentLeads, fastResult: res, lastTopic: core.lastTopic, lastKnown: core.lastKnown, split: res.split || null } });
   }
 
   if (document.getElementById('showStages').checked) {
