@@ -1,11 +1,11 @@
 
-// dic-profile.js - ユーザーの自己紹介ベース
+// dic-profile.js - ユーザーの自己紹介ベース。保存だけ担当
 class DicProfile {
   constructor() {
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('dic_profile') : null;
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('dic_profile_v2') : null;
     this.data = saved ? JSON.parse(saved) : {
       name: null,
-      pronoun: '私', // 俺/僕/私
+      pronoun: '私',
       likes: [],
       dislikes: [],
       job: null,
@@ -13,9 +13,8 @@ class DicProfile {
       states: []
     };
   }
-
   save(selfInfo) {
-    if (!selfInfo) return;
+    if (!selfInfo?.isSelf) return;
     if (selfInfo.type === 'like' && selfInfo.target) {
       if (!this.data.likes.includes(selfInfo.target)) this.data.likes.push(selfInfo.target);
     }
@@ -24,20 +23,17 @@ class DicProfile {
     }
     this.persist();
   }
-
-  setOnboarding({ name, pronoun, likes, dislikes, job, mood }) {
-    this.data.name = name;
-    this.data.pronoun = pronoun;
-    this.data.likes = likes.split(',').map(s => s.trim()).filter(Boolean);
-    this.data.dislikes = dislikes.split(',').map(s => s.trim()).filter(Boolean);
-    this.data.job = job;
-    this.data.mood = mood;
+  setOnboarding({ name, pronoun, likes }) {
+    this.data.name = name || this.data.name;
+    this.data.pronoun = pronoun || this.data.pronoun;
+    if (likes) {
+      this.data.likes = likes.split(',').map(s=>s.trim()).filter(Boolean);
+    }
     this.persist();
   }
-
   persist() {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('dic_profile', JSON.stringify(this.data));
+      localStorage.setItem('dic_profile_v2', JSON.stringify(this.data));
     }
   }
 }
