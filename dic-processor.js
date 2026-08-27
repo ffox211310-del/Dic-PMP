@@ -1,5 +1,5 @@
 
-// dic-pattern-processor.js - パターン処理部
+// dic-processor.js - 審査で使う部品だけ。状態を持たない
 class DicProcessor {
   normalize(text) {
     return text.toLowerCase()
@@ -8,9 +8,9 @@ class DicProcessor {
       .trim();
   }
 
+  // 0次審査の次: 自己開示検出
   extractSelf(text) {
-    const selfRegex = /^(?:俺|おれ|僕|ぼく|私|わたし|あたし|自分|うち)は(.+)/;
-    const m = text.match(selfRegex);
+    const m = text.match(/^(?:俺|おれ|僕|ぼく|私|わたし|あたし|自分|うち)は(.+)/);
     if (!m) return null;
     const content = m[1];
     const like = content.match(/(.+?)が(.+?)好き/);
@@ -18,8 +18,8 @@ class DicProcessor {
     return { isSelf: true, type: 'state', content, raw: content };
   }
 
+  // 1次審査: 爆速マッチ
   fastMatch(text, dict) {
-    // 将来はAho-Corasickに置き換え可能なシンプル実装
     return dict.map(entry => {
       let score = 0;
       for (const p of entry.patterns) {
@@ -28,13 +28,13 @@ class DicProcessor {
         if (entry.type === 'regex') {
           try { if (new RegExp(p).test(text)) score += 80; } catch(e) {}
         }
-        if (entry.type === 'contains' && text.toLowerCase().includes(p.toLowerCase())) score += 45;
       }
       score *= (entry.weight / 50);
       return { ...entry, score };
     }).filter(e => e.score > 0).sort((a,b) => b.score - a.score);
   }
 
+  // 3次: プロフィール加算
   scoreWithProfile(matches, profile, selfInfo) {
     const likes = profile.data.likes || [];
     return matches.map(m => {
@@ -45,10 +45,10 @@ class DicProcessor {
     }).sort((a,b) => b.score - a.score);
   }
 
+  // 4次: 文脈 (直近の話題はペナルティ)
   filterByContext(matches, recentLeads) {
-    // 直近で使った話題のスコアを少し下げる
     return matches.map(m => {
-      if (recentLeads.includes(m.id)) return { ...m, score: m.score * 0.5 };
+      if (recentLeads.includes(m.id)) return { ...m, score: m.score * 0.4 };
       return m;
     }).sort((a,b) => b.score - a.score);
   }
