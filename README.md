@@ -1,3 +1,2 @@
 # Dic
-PowerMatchingPrompt
-<br>## “Dic”
+PowerMatchingPrompt“Dic”
