@@ -1,91 +1,91 @@
 
-// PowerMatchingPrompt Dic - コアエンジン (dic-core.js)
-// 役割: 7段階審査のパイプライン制御、フィラー、ランダム誘導の司令塔
+// dic-core.js - Dicの根幹部。7段階審査を束ねる
 class DicCore {
   constructor({ dictionary, profile }) {
-    this.dictionary = dictionary; // dic-dictionary.js から注入
-    this.profile = profile; // dic-profile.js
-    this.recentLeads = []; // 直近で誘導した話題の履歴 (ランダム化のため)
+    this.dictionary = dictionary;
+    this.profile = profile;
+    this.processor = new DicProcessor();
+    this.recentLeads = []; // 直近で誘導した話題ID
     this.recentResponses = new Set(); // 同じ返事の連発防止
-    this.processor = new DicProcessor(); // dic-pattern-processor.js
+    this.onFiller = null; // フィラー表示用コールバック
   }
 
+  // メインの会話関数 - ここが何段階も踏む本体
   async talk(rawText) {
+    // 0次: 正規化
     const t0 = this.processor.normalize(rawText);
-    
+
     // 1次: 爆速マッチ
     const fastMatches = this.processor.fastMatch(t0, this.dictionary);
-    const top = fastMatches[0];
 
-    // フィラー判定: 2次以降が重そうなら先に出す
-    const needsThink = (top?.category === '自己開示' || fastMatches.length === 0);
-    if (needsThink) this.onFiller?.('えーっと…');
-
-    // 2次: 自己開示
+    // 2次: 自己開示審査 (俺は私は)
     const selfInfo = this.processor.extractSelf(t0);
 
+    // フィラー判定: 自己開示 or ヒットなしなら「えーっと」を出す価値あり
+    const needsThink = selfInfo?.isSelf || fastMatches.length === 0;
+    if (needsThink && this.onFiller) this.onFiller('えーっと…');
+
     // 3次: プロフィール照合
-    const profileScore = this.processor.scoreWithProfile(fastMatches, this.profile, selfInfo);
+    let scored = this.processor.scoreWithProfile(fastMatches, this.profile, selfInfo);
 
-    // 4次: 文脈チェック
-    const contextFiltered = this.processor.filterByContext(profileScore, this.recentLeads);
+    // 4次: 文脈審査 (直近話題のペナルティ)
+    scored = this.processor.filterByContext(scored, this.recentLeads);
 
-    // 5次: 得意分野誘導 (ここでランダム化)
-    let finalCandidates = contextFiltered;
-    if (finalCandidates.length === 0 || finalCandidates[0].score < 30) {
-      finalCandidates = this.pickRandomStrongTopic(t0);
+    // 5次: 得意分野ランダム誘導審査
+    // スコアが低い or 暇などの曖昧ワードなら、得意分野からランダムに持ってくる
+    let finalCandidates = scored;
+    if (finalCandidates.length === 0 || finalCandidates[0].score < 35) {
+      finalCandidates = this.pickRandomStrongTopic();
     }
 
     // 6次: 応答生成 (ランダム + 重複回避)
     const response = this.pickRandomResponse(finalCandidates[0]);
 
     // 記憶更新
-    if (selfInfo?.isSelf) {
-      this.profile.save(selfInfo);
-    }
+    if (selfInfo?.isSelf) this.profile.save(selfInfo);
     if (response.leadTopic) {
       this.recentLeads.push(response.leadTopic);
-      if (this.recentLeads.length > 5) this.recentLeads.shift(); // 5件まで記憶
+      if (this.recentLeads.length > 5) this.recentLeads.shift();
     }
 
+    // 7次以降はWorkerに任せるので、ここで表の処理は終わり
     return response;
   }
 
-  // 同じ質問に引っ張らないためのランダム誘導
-  pickRandomStrongTopic(text) {
-    const strong = this.dictionary.filter(d => d.isStrong); // 得意分野フラグ
-    // 直近で使った話題は除外
+  // 5次審査の中身: 同じ質問に持っていかないランダム誘導
+  pickRandomStrongTopic() {
+    const strong = this.dictionary.filter(d => d.isStrong);
     let pool = strong.filter(d => !this.recentLeads.includes(d.id));
     if (pool.length === 0) {
-      this.recentLeads = []; // リセット
+      this.recentLeads = []; // 全部使ったらリセット
       pool = strong;
     }
-    // 完全ランダムではなく、ユーザーのlikesに近いものを優先しつつランダム
-    const liked = this.profile.data.likes || [];
-    pool = pool.sort(() => Math.random() - 0.5); // シャッフル
-    pool = pool.sort((a,b) => {
-      const aLiked = liked.some(l => a.patterns.some(p => l.includes(p) || p.includes(l))) ? 1 : 0;
-      const bLiked = liked.some(l => b.patterns.some(p => l.includes(p) || p.includes(l))) ? 1 : 0;
-      return bLiked - aLiked; // 好きなものが少し優先、でもシャッフルでランダム
-    });
-    // 上位3つからランダムで1つ
-    const top3 = pool.slice(0,3);
-    return [top3[Math.floor(Math.random()*top3.length)]];
+    // 完全シャッフル
+    pool = [...pool].sort(() => Math.random() - 0.5);
+    // 上位3つからランダムで1つ (毎回違う)
+    const top3 = pool.slice(0, 3);
+    const chosen = top3[Math.floor(Math.random() * top3.length)];
+    return chosen ? [{ ...chosen, score: 60 }] : [];
   }
 
   pickRandomResponse(entry) {
-    if (!entry) return { text: 'そうなんだ。もうちょっと教えて？', followUp: null };
-    // 同じ返事を連続で使わない
+    if (!entry) return { text: 'そうなんだ。もうちょっと教えて？', followUp: null, entry: null, leadTopic: null };
     let available = entry.responses.filter(r => !this.recentResponses.has(r));
     if (available.length === 0) {
       this.recentResponses.clear();
       available = entry.responses;
     }
-    const chosen = available[Math.floor(Math.random()*available.length)];
+    let chosen = available[Math.floor(Math.random() * available.length)];
     this.recentResponses.add(chosen);
-    // followUpもランダム
+
+    // {1} 置換 (例: {1}が好きなんだね → 猫が好きなんだね)
+    if (entry.id === 'self_like' && entry._captured) {
+      chosen = chosen.replace('{1}', entry._captured);
+    }
+
     const followUps = Array.isArray(entry.followUp) ? entry.followUp : [entry.followUp];
-    const fu = followUps[Math.floor(Math.random()*followUps.length)];
-    return { text: chosen, followUp: fu, leadTopic: entry.id, entry };
+    const fu = followUps[Math.floor(Math.random() * followUps.length)];
+
+    return { text: chosen, followUp: fu, entry, leadTopic: entry.id };
   }
 }
