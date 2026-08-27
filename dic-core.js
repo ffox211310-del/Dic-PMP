@@ -1,5 +1,5 @@
 
-// dic-core.js v2 - 共感方針。未知語でも会話を続ける
+// dic-core.js v2.1 - 共感を最優先、lastTopicで会話を繋ぐ
 class DicCore {
   constructor({ dictionary, profile }) {
     this.dictionary = dictionary;
@@ -7,45 +7,50 @@ class DicCore {
     this.processor = new DicProcessor();
     this.recentLeads = [];
     this.recentResponses = new Set();
-    this.lastTopic = null; // 会話の流れ: 直前の話題 (例: 猫)
+    this.lastTopic = null; // 直前の話題
+    this.lastKnown = null; // 直前の形容詞 (かっこいい など)
     this.onFiller = null;
   }
 
   async talk(rawText) {
     const t0 = this.processor.normalize(rawText);
-    const split = this.processor.splitKnownUnknown(rawText); // 未知語分解
+    const split = this.processor.splitKnownUnknown(rawText);
     const selfInfo = this.processor.extractSelf(t0);
     const fastMatches = this.processor.fastMatch(t0, this.dictionary);
 
-    const needsThink = selfInfo?.isSelf || fastMatches.length === 0 || (split && split.unknown);
-    if (needsThink && this.onFiller) this.onFiller('えーっと…');
+    // 共感ルートを最優先: 未知語+既知形容詞がある時は辞書より共感を優先
+    const hasEmpathySignal = split && split.known;
+    if (hasEmpathySignal) {
+      if (this.onFiller) this.onFiller('えーっと…');
+      const empathyRes = this.buildEmpathyResponse(split, rawText, false);
+      if (split.unknown) {
+        this.lastTopic = split.unknown;
+        this.lastKnown = split.knownBase || split.known;
+      }
+      if (selfInfo?.isSelf) this.profile.save(selfInfo);
+      return empathyRes;
+    }
 
-    // 1. 辞書マッチが強ければそれを優先
+    // lastTopic補完: 好きだよ だけの時
+    if (split && !split.unknown && split.known && this.lastTopic) {
+      const complemented = { unknown: this.lastTopic, known: split.known, knownBase: split.knownBase };
+      const empathyRes = this.buildEmpathyResponse(complemented, rawText, true);
+      // lastTopicはそのまま維持
+      return empathyRes;
+    }
+
+    // 通常の辞書ルート
     let scored = this.processor.scoreWithProfile(fastMatches, this.profile, selfInfo);
     scored = this.processor.filterByContext(scored, this.recentLeads);
 
-    // 2. 未知語共感ルート (辞書にない or スコア低い時)
-    if ((scored.length === 0 || scored[0].score < 40) && split) {
-      const empathyRes = this.buildEmpathyResponse(split, rawText);
-      if (empathyRes) {
-        // lastTopicを更新
-        if (split.unknown) this.lastTopic = split.unknown;
-        if (selfInfo?.isSelf) this.profile.save(selfInfo);
-        return empathyRes;
-      }
+    // 辞書にヒットしない & 未知語だけ (例: 小学生のときから) -> 共感
+    if ((scored.length === 0 || scored[0].score < 35) && split && split.unknown) {
+      const empathyRes = this.buildEmpathyResponse(split, rawText, false);
+      this.lastTopic = split.unknown;
+      if (selfInfo?.isSelf) this.profile.save(selfInfo);
+      return empathyRes;
     }
 
-    // 3. lastTopicを使った補完 (好きだよ だけの時)
-    if (split && !split.unknown && split.known && this.lastTopic) {
-      // 例: Dic「猫好きなの？」-> ユーザー「好きだよ」-> lastTopic=猫 を使って共感
-      const complemented = { unknown: this.lastTopic, known: split.known, knownBase: split.knownBase };
-      const empathyRes = this.buildEmpathyResponse(complemented, rawText, true);
-      if (empathyRes) {
-        return empathyRes;
-      }
-    }
-
-    // 4. 通常の辞書応答 (共感 + 話題ふり)
     let finalCandidates = scored;
     if (finalCandidates.length === 0 || finalCandidates[0].score < 35) {
       finalCandidates = this.pickRandomStrongTopic();
@@ -55,7 +60,6 @@ class DicCore {
     if (response.leadTopic) {
       this.recentLeads.push(response.leadTopic);
       if (this.recentLeads.length > 5) this.recentLeads.shift();
-      this.lastTopic = response.leadTopic.replace(/topic_|daily_|greet_/g, '') || this.lastTopic;
     }
     if (response.topicToRemember) {
       this.lastTopic = response.topicToRemember;
@@ -64,12 +68,10 @@ class DicCore {
     return response;
   }
 
-  // 共感テンプレート生成 - 方針: 共感 -> 話題ふり
   buildEmpathyResponse(split, rawText, isComplemented=false) {
     const { unknown, known, knownBase } = split;
     const k = knownBase || known || '';
 
-    // テンプレート
     const empathyTemplates = {
       'かっこいい': [
         `${unknown ? unknown + 'は' : ''}カッコいいよね`,
@@ -82,7 +84,8 @@ class DicCore {
       ],
       '好き': [
         `${unknown ? unknown + 'が' : ''}好きなんだね`,
-        `${unknown ? unknown + '、' : ''}好きなのいいね`
+        `${unknown ? unknown + '、' : ''}好きなのいいね`,
+        `${unknown ? unknown + 'が' : ''}好きなんだ、覚えておくよ`
       ],
       'すごい': [
         `${unknown ? unknown + 'って' : ''}すごいよね`,
@@ -106,7 +109,8 @@ class DicCore {
       'かっこいい': [
         '他にもカッコいいのある？',
         'どんなところがカッコいいの？',
-        '他にカッコいいと思うのある？'
+        '他にカッコいいと思うのある？',
+        '一番カッコいいと思うのはどれ？'
       ],
       'かわいい': [
         '他にもかわいいのある？',
@@ -115,7 +119,8 @@ class DicCore {
       '好き': [
         '他にも好きなのある？',
         'どんなところが好きなの？',
-        'いつから好きなの？'
+        'いつから好きなの？',
+        '一番好きなのはどれ？'
       ],
       'すごい': [
         '他にもすごいのある？',
@@ -126,8 +131,8 @@ class DicCore {
         'どんなところが楽しいの？'
       ],
       'default': [
+        unknown ? `${unknown}のどんなところが${k ? k : 'いい'}の？` : 'どんな感じなの？',
         '他にもある？',
-        'どんな感じなの？',
         '詳しく教えて？'
       ]
     };
@@ -135,10 +140,15 @@ class DicCore {
     let empathyList = empathyTemplates[k] || empathyTemplates['default'];
     let followList = followUpTemplates[k] || followUpTemplates['default'];
 
-    // 未知語が完全にない (好きだよだけ) で補完された場合
     if (!unknown && isComplemented) {
       empathyList = [`${this.lastTopic}が好きなんだね、覚えておくよ`];
-      followList = ['他にも好きなのある？', `${this.lastTopic}のどんなところが好き？`];
+      followList = ['他にも好きなのある？', `${this.lastTopic}のどんなところが好き？`, 'いつから好きなの？'];
+    }
+
+    // 小学生のときから のような時間の話は特別扱い
+    if (!k && unknown) {
+      empathyList = [`${unknown}からなんだね`, `${unknown}、いいね`, `${unknown}なんだね、覚えておくよ`];
+      followList = ['それでどうなったの？', '他にもある？', 'どんな感じだったの？'];
     }
 
     const empathy = empathyList[Math.floor(Math.random()*empathyList.length)];
@@ -147,7 +157,7 @@ class DicCore {
     return {
       text: empathy,
       followUp: followUp,
-      entry: { id: 'empathy_unknown', score: 70, category: '共感' },
+      entry: { id: 'empathy_unknown', score: 90, category: '共感' }, // スコアを上げて最優先に
       leadTopic: 'empathy_unknown',
       topicToRemember: unknown || this.lastTopic,
       isEmpathy: true,
@@ -177,19 +187,12 @@ class DicCore {
     }
     let chosen = available[Math.floor(Math.random()*available.length)];
     this.recentResponses.add(chosen);
-
-    if (entry._captured) {
-      chosen = chosen.replace('{1}', entry._captured);
-    }
-    // 未知語があればテンプレートに埋める
-    if (split?.unknown && chosen.includes('{1}')) {
-      chosen = chosen.replace('{1}', split.unknown);
-    }
+    if (entry._captured) chosen = chosen.replace('{1}', entry._captured);
+    if (split?.unknown && chosen.includes('{1}')) chosen = chosen.replace('{1}', split.unknown);
 
     const followUps = Array.isArray(entry.followUp) ? entry.followUp : [entry.followUp];
     let fu = followUps[Math.floor(Math.random()*followUps.length)];
     if (split?.unknown && fu && fu.includes('{1}')) fu = fu.replace('{1}', split.unknown);
-
     return { text: chosen, followUp: fu, entry, leadTopic: entry.id, topicToRemember: split?.unknown || entry.id };
   }
 }
