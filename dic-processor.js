@@ -1,8 +1,7 @@
 
-// dic-processor.js v2 - 未知語を共感で返す
+// dic-processor.js v2.1 - 未知語分解を改善、うん等のフィラー除去
 class DicProcessor {
   constructor() {
-    // 知ってる語 (形容詞・感情) - これがあれば未知語でも会話になる
     this.knownTokens = [
       'かっこいい','カッコいい','かっこよ','かっこよく',
       'かわいい','可愛い','かわい',
@@ -12,8 +11,10 @@ class DicProcessor {
       '楽しい','たのしい','面白い','おもしろい',
       'つまらない','怖い','こわい',
       '嬉しい','うれしい','悲しい','かなしい',
-      '疲れた','つかれた','最高','最強','最悪','かっこいいよね','かわいいよね'
-    ].sort((a,b) => b.length - a.length); // 長い順にマッチさせる
+      '疲れた','つかれた','最高','最強','最悪'
+    ].sort((a,b) => b.length - a.length);
+
+    this.fillerWords = ['うん','そう','へえ','なるほど','そっか','はい','うんうん','そうそう','まあ'];
   }
 
   normalize(text) {
@@ -32,28 +33,42 @@ class DicProcessor {
     return { isSelf: true, type: 'state', content, raw: content };
   }
 
-  // 未知語分解: ゾイドかっこいい -> { unknown: 'ゾイド', known: 'かっこいい' }
+  cleanUnknown(text) {
+    let t = text;
+    // 先頭のフィラー除去: うん。好きだよ -> 好きだよ
+    for (const f of this.fillerWords) {
+      if (t.startsWith(f)) t = t.slice(f.length);
+    }
+    t = t.replace(/^[ 、,　\.]+/, '').trim();
+    t = t.replace(/は|が|だよ|だね|なの|なんだ|だ|です|ます|\?|？|！|!/g, '').trim();
+    t = t.replace(/\s+/g, '');
+    return t;
+  }
+
   splitKnownUnknown(text) {
-    const raw = text.replace(/は|が|だよ|だね|なの|なんだ|だ|です|ます|\?|？/g, '').trim();
+    const original = text;
+    // フィラー除去したクリーンなテキストで判定
+    let cleanedForCheck = text;
+    for (const f of this.fillerWords) {
+      cleanedForCheck = cleanedForCheck.replace(f, '');
+    }
+
     for (const known of this.knownTokens) {
-      if (text.includes(known)) {
-        let unknown = text.replace(known, '').trim();
-        // はがとか除去
-        unknown = unknown.replace(/は|が|が好き|がすき|だよ|だね|なの|？|\?|！|!/g, '').trim();
-        unknown = unknown.replace(/\s+/g, '');
-        if (unknown.length > 0 && unknown.length <= 10) {
-          return { unknown, known, knownBase: this.normalizeKnown(known) };
+      if (cleanedForCheck.includes(known)) {
+        let unknown = cleanedForCheck.replace(known, '').trim();
+        unknown = this.cleanUnknown(unknown);
+        if (unknown.length > 0 && unknown.length <= 12) {
+          return { unknown, known, knownBase: this.normalizeKnown(known), originalUnknown: unknown };
         }
-        // 未知語なしのパターン (好きだよ だけ) の場合
         if (unknown.length === 0) {
-          return { unknown: null, known, knownBase: this.normalizeKnown(known) };
+          return { unknown: null, known, knownBase: this.normalizeKnown(known), originalUnknown: null };
         }
       }
     }
-    // 完全未知語 (辞書にない名詞だけ) の場合も一応拾う
-    if (raw.length > 0 && raw.length <= 8) {
-      // 既知トークンが一つもないけど、短い名詞っぽい -> 未知語として扱う
-      return { unknown: raw, known: null, knownBase: null };
+    // 知ってる形容詞がなくても、短い名詞っぽければ未知語として扱う (例: 小学生のときから)
+    const raw = this.cleanUnknown(text);
+    if (raw.length > 0 && raw.length <= 15 && !this.fillerWords.includes(raw)) {
+      return { unknown: raw, known: null, knownBase: null, originalUnknown: raw };
     }
     return null;
   }
