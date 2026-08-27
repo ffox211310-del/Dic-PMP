@@ -1,1 +1,2 @@
-# R.E.P.E.A.T.
+# Dic
+PowerMatchingPromptDictionary“Dic”
